@@ -2,4 +2,3 @@ discord.py
 quart
 requests
 uvicorn
-gunicorn
