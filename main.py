@@ -4,39 +4,38 @@ import asyncio
 from quart import Quart, request
 from datetime import datetime
 
-# 1. Setup
 app = Quart(__name__)
 intents = discord.Intents.default()
-intents.message_content = True # Ensure this is ON in Dev Portal
+intents.message_content = True 
 bot = discord.Client(intents=intents)
 
-# 2. Web Routes (To keep Render happy and talk to Roblox)
+# --- HOME PAGE (Fixes the 404 in your browser) ---
 @app.route('/')
 async def home():
-    return f"🟢 Bridge is Online. Current Time: {datetime.now()}", 200
+    return "<h1>Bridge is Online</h1><p>Waiting for Roblox signals...</p>", 200
 
-@app.route('/status', methods=['GET'])
-async def status():
-    return {"bot_online": not bot.is_closed()}, 200
+# --- THE ROBLOX ENDPOINT (Fixes the 404 in Roblox) ---
+@app.route('/update-stats', methods=['POST'])
+async def update_stats():
+    data = await request.get_json()
+    print(f"📥 Received data from Roblox: {data}")
+    
+    # Send to Discord
+    channel = bot.get_channel(int(os.getenv("CHANNEL_ID")))
+    if channel:
+        embed = discord.Embed(
+            title=f"🎮 {data.get('name', 'Game')}",
+            description=f"**Status:** {data.get('player_list', 'Active')}",
+            color=discord.Color.green()
+        )
+        # You can add more fields here based on your Roblox data
+        bot.loop.create_task(channel.send(embed=embed))
+    
+    return {"status": "success"}, 200
 
-# 3. Discord Bot Events
-@bot.event
-async def on_ready():
-    print(f'✅ SUCCESS: Logged in as {bot.user}')
-    # Try to send a message to confirm it's working
-    try:
-        channel = bot.get_channel(int(os.getenv("CHANNEL_ID")))
-        if channel:
-            await channel.send("🚀 **Bot is now Online on Render!**")
-    except Exception as e:
-        print(f"Error sending boot message: {e}")
-
-# 4. THE BRIDGE: This starts the bot when the web server starts
 @app.before_serving
 async def start_bot():
-    print("🤖 Starting Discord Bot background task...")
     asyncio.create_task(bot.start(os.getenv("DISCORD_TOKEN")))
 
 if __name__ == "__main__":
-    # This part only runs if you run the file locally
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
