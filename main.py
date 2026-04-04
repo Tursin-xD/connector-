@@ -8,35 +8,50 @@ intents = discord.Intents.default()
 intents.message_content = True 
 bot = discord.Client(intents=intents)
 
-# This stores the latest Roblox data
-game_data = {}
+# This handles the buttons for the message
+class GameControlView(discord.ui.View):
+    def __init__(self, place_id, job_id):
+        super().__init__(timeout=None)
+        # Button 1: Join Game
+        join_url = f"https://www.roblox.com/games/start?placeId={place_id}&gameInstanceId={job_id}"
+        self.add_item(discord.ui.Button(label="🎮 Join Game", url=join_url))
+        
+    @discord.ui.button(label="💻 Execute vLua", style=discord.ButtonStyle.danger)
+    async def execute_callback(self, interaction, button):
+        # You can add a Modal here later for code input!
+        await interaction.response.send_message("Execution signal ready!", ephemeral=True)
 
 @app.route('/')
 async def home():
-    return "<h1>Bridge is Online</h1>", 200
+    return "<h1>Bridge UI Online</h1>", 200
 
 @app.route('/update-stats', methods=['POST'])
 async def update_stats():
-    global game_data
-    game_data = await request.get_json()
-    
-    # Trigger the Discord message in the background
-    asyncio.create_task(send_to_discord(game_data))
+    data = await request.get_json()
+    asyncio.create_task(send_detailed_embed(data))
     return {"status": "success"}, 200
 
-async def send_to_discord(data):
+async def send_detailed_embed(data):
     channel = bot.get_channel(int(os.getenv("CHANNEL_ID")))
     if channel and bot.is_ready():
         embed = discord.Embed(
-            title=f"🎮 {data.get('name', 'Infect Game Detected')}",
-            description=f"**Players:** {data.get('players')}/{data.get('max_players')}\n**Status:** {data.get('player_list')}",
-            color=discord.Color.red()
+            title=f"📡 Infect Game Detected: {data.get('name')}",
+            url=f"https://www.roblox.com/games/{data.get('place_id')}",
+            color=discord.Color.from_rgb(255, 0, 0)
         )
-        await channel.send(embed=embed)
+        
+        embed.add_field(name="📊 Statistics", value=f"**Players:** `{data.get('players')}/{data.get('max_players')}`\n**Ping:** `{data.get('ping')}ms`", inline=True)
+        embed.add_field(name="🆔 Identifiers", value=f"**Place:** `{data.get('place_id')}`\n**Job:** `{data.get('job_id', 'N/A')[:10]}...`", inline=True)
+        embed.add_field(name="🕵️ Activity", value=f"```{data.get('player_list', 'No details')}```", inline=False)
+        embed.set_footer(text="yunito's detection system • v2.0")
+        
+        # Add the buttons!
+        view = GameControlView(data.get('place_id'), data.get('job_id'))
+        
+        await channel.send(embed=embed, view=view)
 
 @app.before_serving
 async def startup():
-    # Force the bot to start alongside the web server
     asyncio.create_task(bot.start(os.getenv("DISCORD_TOKEN")))
 
 if __name__ == "__main__":
