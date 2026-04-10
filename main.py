@@ -1,5 +1,5 @@
 import discord
-from discord.ext import commands, tasks
+from discord.ext import commands
 from discord import app_commands
 import os
 import asyncio
@@ -14,15 +14,15 @@ intents.members = True
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Dictionary to store users for live DM updates {user_id: message_object}
+# This dictionary keeps track of who needs DM updates
+# Format: { user_id: message_object_to_edit }
 active_subscribers = {}
 
-# --- EMBED & VIEW BUILDERS ---
+# --- EMBED BUILDER ---
 
 def create_elite_embed(data, is_live=False):
-    """Creates a high-quality embed with red/green themes."""
+    """Creates a high-quality embed. Live updates get a green sidebar."""
     embed_title = "📡 LIVE STATUS UPDATED" if is_live else "🎯 TARGET SERVER DETECTED"
-    # Red (0xFF0000) for alerts, Green (0x00FF00) for live updates
     color = 0x00FF00 if is_live else 0xFF0000 
     
     embed = discord.Embed(
@@ -32,27 +32,20 @@ def create_elite_embed(data, is_live=False):
         timestamp=datetime.utcnow()
     )
     
-    # Organized Stats Grid
     embed.add_field(name="👥 Players", value=f"`{data.get('players', 0)}/{data.get('max_players', 0)}`", inline=True)
     embed.add_field(name="🛰️ Ping", value=f"`{data.get('ping', 0)}ms`", inline=True)
     embed.add_field(name="🆔 Place ID", value=f"`{data.get('place_id', 'N/A')}`", inline=True)
     
-    # Player Logs in 'fix' syntax highlighting
     player_logs = data.get('player_list', 'No logs available')
-    embed.add_field(
-        name="📜 Server Logs", 
-        value=f"```fix\n{player_logs}\n```", 
-        inline=False
-    )
+    embed.add_field(name="📜 Server Logs", value=f"```fix\n{player_logs}\n```", inline=False)
     
-    embed.set_footer(text="System: Stable • yunito bridge v3.0")
+    embed.set_footer(text="System: Stable • yunito bridge v3.2")
     if bot.user:
         embed.set_thumbnail(url=bot.user.display_avatar.url)
-        
     return embed
 
 def create_join_view(data):
-    """Adds the Execute/Join button."""
+    """Creates the 'Join & Execute' button for the embed."""
     view = discord.ui.View(timeout=None)
     join_url = f"https://www.roblox.com/games/start?placeId={data.get('place_id')}&gameInstanceId={data.get('job_id')}"
     view.add_item(discord.ui.Button(label="🎮 Join & Execute", url=join_url, style=discord.ButtonStyle.link))
@@ -62,77 +55,78 @@ def create_join_view(data):
 
 @bot.tree.command(name="ping", description="Check bot latency")
 async def ping(interaction: discord.Interaction):
-    latency = round(bot.latency * 1000)
-    await interaction.response.send_message(f"🏓 Pong! Latency: `{latency}ms`", ephemeral=True)
+    await interaction.response.send_message(f"🏓 Pong! Latency: `{round(bot.latency * 1000)}ms`建设", ephemeral=True)
 
-@bot.tree.command(name="status", description="Receive auto-updating live logs in DMs")
+@bot.tree.command(name="status", description="Start receiving auto-updating live logs in your DMs")
 async def status(interaction: discord.Interaction):
+    """This command triggers the DM part."""
     await interaction.response.defer(ephemeral=True)
     try:
-        embed = discord.Embed(title="🔄 Connecting to Bridge...", description="Waiting for Roblox data packet...", color=0xFFFFFF)
+        embed = discord.Embed(
+            title="🔄 Initializing Live Feed...", 
+            description="Waiting for the first data packet from Roblox...", 
+            color=0xFFFFFF
+        )
+        # Send the initial DM
         dm_msg = await interaction.user.send(embed=embed)
         
-        # Save DM message object for later editing
+        # Save the message object to our dictionary
         active_subscribers[interaction.user.id] = dm_msg
-        await interaction.followup.send("✅ Live status activated! Check your DMs.", ephemeral=True)
+        
+        await interaction.followup.send("✅ **Success!** Check your DMs. I will update that message whenever server stats change.", ephemeral=True)
     except discord.Forbidden:
-        await interaction.followup.send("❌ Error: Enable Direct Messages in Privacy Settings!", ephemeral=True)
+        await interaction.followup.send("❌ **Error:** I can't DM you! Please enable 'Allow direct messages from server members' in your privacy settings.", ephemeral=True)
 
-@bot.tree.command(name="stop_updates", description="Stop the live DM feed")
-async def stop_updates(interaction: discord.Interaction):
-    if interaction.user.id in active_subscribers:
-        del active_subscribers[interaction.user.id]
-        await interaction.response.send_message("🛑 Live updates stopped.", ephemeral=True)
-    else:
-        await interaction.response.send_message("❓ No active status feed found.", ephemeral=True)
-
-# --- WEB SERVER & API ---
+# --- WEB SERVER ROUTES ---
 
 @app.route('/')
 async def home():
-    return "<h1>Bridge UI Online</h1>", 200
+    return "Bridge Status: Online", 200
+
+@app.route('/get-lua', methods=['GET'])
+async def get_lua():
+    return "Route Active", 200
 
 @app.route('/update-stats', methods=['POST'])
 async def update_stats():
+    """This is called by your Roblox script."""
     data = await request.get_json()
     
     if bot.is_ready():
-        # 1. Update Public Logging Channel
+        # 1. Update the Public Channel (if ID is provided)
         channel_id = os.getenv("CHANNEL_ID")
         if channel_id:
             channel = bot.get_channel(int(channel_id))
             if channel:
                 bot.loop.create_task(channel.send(embed=create_elite_embed(data), view=create_join_view(data)))
         
-        # 2. Update all active DM subscribers
+        # 2. THE DM PART: Loop through all users who ran /status and edit their DM
         for user_id, msg in list(active_subscribers.items()):
             bot.loop.create_task(update_dm_safe(msg, data, user_id))
             
     return {"status": "success"}, 200
 
 async def update_dm_safe(msg, data, user_id):
+    """Edits the existing DM message instead of sending a new one."""
     try:
         await msg.edit(embed=create_elite_embed(data, is_live=True), view=create_join_view(data))
-    except Exception:
-        # If user blocked bot, clean up the dictionary
+    except Exception as e:
+        print(f"Could not update DM for {user_id}: {e}")
+        # If the message was deleted or user blocked the bot, remove them from subscribers
         if user_id in active_subscribers:
             del active_subscribers[user_id]
 
-# --- BOT EVENTS ---
+# --- STARTUP LOGIC ---
 
 @bot.event
 async def on_ready():
-    # Push slash commands to Discord
     await bot.tree.sync()
-    print(f"✅ Bot Online: {bot.user}")
+    print(f"✅ Bot is logged in as {bot.user}")
 
 @app.before_serving
 async def startup():
-    # Delay prevents 1015 Cloudflare ban during rapid restarts
-    await asyncio.sleep(2)
+    await asyncio.sleep(2) # Safety delay
     asyncio.create_task(bot.start(os.getenv("DISCORD_TOKEN")))
-
-# --- EXECUTION ---
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
