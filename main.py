@@ -4,6 +4,7 @@ from discord import app_commands
 import os
 import asyncio
 import uvicorn
+import httpx
 from quart import Quart, request
 from datetime import datetime
 
@@ -38,16 +39,30 @@ def create_elite_embed(data, is_live=False):
     player_logs = data.get('player_list', 'No logs available')
     embed.add_field(name="📜 Server Logs", value=f"```fix\n{player_logs}\n```", inline=False)
     
-    embed.set_footer(text="System: Stable • yunito v3.6")
+    embed.set_footer(text="System: Stable • yunito v3.7")
     if bot.user:
         embed.set_thumbnail(url=bot.user.display_avatar.url)
     return embed
 
 def create_join_view(data):
+    """Creates the 'Join & Execute' button."""
     view = discord.ui.View(timeout=None)
     join_url = f"https://www.roblox.com/games/start?placeId={data.get('place_id')}&gameInstanceId={data.get('job_id')}"
     view.add_item(discord.ui.Button(label="🎮 Join & Execute", url=join_url, style=discord.ButtonStyle.link))
     return view
+
+# --- KEEP-ALIVE LOOP (httpx restored) ---
+
+@tasks.loop(minutes=10)
+async def keep_alive_ping():
+    """Pings the server URL every 10 mins to keep it awake."""
+    url = "https://connector-x5ny.onrender.com/"
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url)
+            print(f"⏰ Keep-alive ping sent - Status: {response.status_code}")
+    except Exception as e:
+        print(f"⚠️ Keep-alive failed: {e}")
 
 # --- SLASH COMMANDS ---
 
@@ -104,6 +119,8 @@ async def update_dm_safe(msg, data, user_id):
 @bot.event
 async def on_ready():
     await bot.tree.sync()
+    if not keep_alive_ping.is_running():
+        keep_alive_ping.start()
     print(f"✅ Bot Online: {bot.user}")
 
 @app.before_serving
@@ -112,6 +129,5 @@ async def startup():
     asyncio.create_task(bot.start(os.getenv("DISCORD_TOKEN")))
 
 if __name__ == "__main__":
-    # Start the app
     port = int(os.getenv("PORT", 5000))
     uvicorn.run(app, host="0.0.0.0", port=port)
