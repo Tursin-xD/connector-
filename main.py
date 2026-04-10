@@ -15,13 +15,11 @@ intents.members = True
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Dictionary for DM updates: {user_id: message_object}
 active_subscribers = {}
 
 # --- EMBED & VIEW BUILDERS ---
 
 def create_elite_embed(data, is_live=False):
-    """Creates the high-quality red/green themed embeds."""
     embed_title = "📡 LIVE STATUS UPDATED" if is_live else "🎯 TARGET SERVER DETECTED"
     color = 0x00FF00 if is_live else 0xFF0000 
     
@@ -39,37 +37,27 @@ def create_elite_embed(data, is_live=False):
     player_logs = data.get('player_list', 'No logs available')
     embed.add_field(name="📜 Server Logs", value=f"```fix\n{player_logs}\n```", inline=False)
     
-    embed.set_footer(text="System: Stable • yunito v3.7")
+    embed.set_footer(text="System: Stable • yunito v3.8")
     if bot.user:
         embed.set_thumbnail(url=bot.user.display_avatar.url)
     return embed
 
 def create_join_view(data):
-    """Creates the 'Join & Execute' button."""
     view = discord.ui.View(timeout=None)
     join_url = f"https://www.roblox.com/games/start?placeId={data.get('place_id')}&gameInstanceId={data.get('job_id')}"
     view.add_item(discord.ui.Button(label="🎮 Join & Execute", url=join_url, style=discord.ButtonStyle.link))
     return view
 
-# --- KEEP-ALIVE LOOP (httpx restored) ---
-
+# --- KEEP-ALIVE ---
 @tasks.loop(minutes=10)
 async def keep_alive_ping():
-    """Pings the server URL every 10 mins to keep it awake."""
     url = "https://connector-x5ny.onrender.com/"
     try:
         async with httpx.AsyncClient() as client:
-            response = await client.get(url)
-            print(f"⏰ Keep-alive ping sent - Status: {response.status_code}")
-    except Exception as e:
-        print(f"⚠️ Keep-alive failed: {e}")
+            await client.get(url)
+    except: pass
 
 # --- SLASH COMMANDS ---
-
-@bot.tree.command(name="ping", description="Check bot latency")
-async def ping(interaction: discord.Interaction):
-    await interaction.response.send_message(f"🏓 Pong! Latency: `{round(bot.latency * 1000)}ms`", ephemeral=True)
-
 @bot.tree.command(name="status", description="Get auto-updating live logs in your DMs")
 async def status(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
@@ -79,21 +67,17 @@ async def status(interaction: discord.Interaction):
         active_subscribers[interaction.user.id] = dm_msg
         await interaction.followup.send("✅ Live status feed activated in your DMs.", ephemeral=True)
     except discord.Forbidden:
-        await interaction.followup.send("❌ Error: Open your DMs in Privacy Settings!", ephemeral=True)
+        await interaction.followup.send("❌ Error: Open your DMs!", ephemeral=True)
 
 # --- WEB SERVER ROUTES ---
-
 @app.route('/')
-async def home():
-    return "Bridge Online", 200
-
-@app.route('/get-lua', methods=['GET'])
-async def get_lua():
-    return "Success", 200
+async def home(): return "Bridge Online", 200
 
 @app.route('/update-stats', methods=['POST'])
 async def update_stats():
     data = await request.get_json()
+    print(f"📥 Received data from Roblox: {data.get('name')}") # Debug Log
+
     if bot.is_ready():
         # 1. Update Public Channel
         chan_id = os.getenv("CHANNEL_ID")
@@ -101,6 +85,8 @@ async def update_stats():
             channel = bot.get_channel(int(chan_id))
             if channel:
                 bot.loop.create_task(channel.send(embed=create_elite_embed(data), view=create_join_view(data)))
+            else:
+                print(f"❌ Could not find channel with ID: {chan_id}")
         
         # 2. Update DM Subscribers
         for user_id, msg in list(active_subscribers.items()):
@@ -111,16 +97,16 @@ async def update_stats():
 async def update_dm_safe(msg, data, user_id):
     try:
         await msg.edit(embed=create_elite_embed(data, is_live=True), view=create_join_view(data))
-    except:
+        print(f"✅ DM updated for user {user_id}")
+    except Exception as e:
+        print(f"❌ DM Update Failed for {user_id}: {e}")
         if user_id in active_subscribers: del active_subscribers[user_id]
 
 # --- STARTUP ---
-
 @bot.event
 async def on_ready():
     await bot.tree.sync()
-    if not keep_alive_ping.is_running():
-        keep_alive_ping.start()
+    if not keep_alive_ping.is_running(): keep_alive_ping.start()
     print(f"✅ Bot Online: {bot.user}")
 
 @app.before_serving
@@ -129,5 +115,4 @@ async def startup():
     asyncio.create_task(bot.start(os.getenv("DISCORD_TOKEN")))
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 5000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
